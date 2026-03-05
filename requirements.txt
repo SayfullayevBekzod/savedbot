@@ -12,9 +12,9 @@ psycopg2-binary
 uvicorn
 gunicorn
 fastapi
-shazamio
 mutagen
 arq
-shazamio  # duplicate, but kept for consistency with my plan
 python-multipart
 pytz
+# shazamio removed - requires Rust compilation
+# Use alternative music recognition or remove feature
