@@ -34,6 +34,37 @@ class Settings(BaseSettings):
     # Arq Settings
     ARQ_REDIS_URL: str = "redis://localhost:6379/1"
     
+    @classmethod
+    def settings_customise_sources(
+        cls,
+        settings_cls,
+        init_settings,
+        env_settings,
+        dotenv_settings,
+        file_secret_settings,
+    ):
+        # Handle ADMIN_IDS from environment (can be comma-separated or single int)
+        env_vars = dict(env_settings)
+        if "ADMIN_IDS" in env_vars:
+            admin_ids_str = env_vars["ADMIN_IDS"]
+            try:
+                # Try to parse as comma-separated list
+                if "," in admin_ids_str:
+                    admin_ids = [int(id.strip()) for id in admin_ids_str.split(",")]
+                else:
+                    # Single integer
+                    admin_ids = [int(admin_ids_str)]
+                env_vars["ADMIN_IDS"] = admin_ids
+            except (ValueError, TypeError):
+                env_vars["ADMIN_IDS"] = []
+        
+        return (
+            init_settings,
+            env_settings,
+            dotenv_settings,
+            file_secret_settings,
+        )
+    
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
 config = Settings()
