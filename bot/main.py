@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import os
+import re
 import socket
 import sys
 from urllib.parse import quote, urlsplit, urlunsplit
@@ -9,6 +10,7 @@ from arq.connections import create_pool, RedisSettings
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
+from aiogram.exceptions import TelegramUnauthorizedError
 from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
 from aiohttp import web
 
@@ -90,11 +92,36 @@ def _build_upstash_redis_url(rest_url: str, token: str, db_index: int = 0):
     return f"rediss://default:{encoded_token}@{host}:{port}/{db_index}"
 
 
+def _repair_missing_at_in_redis_url(url: str):
+    if not isinstance(url, str):
+        return None
+    token = (config.UPSTASH_REDIS_REST_TOKEN or "").strip().strip("\"'")
+    if not token:
+        return None
+
+    # Handles malformed values like: redis://default:host:6379 or rediss://default:host:6379/0
+    match = re.match(
+        r"^(?:redis|rediss)://default:(?P<host>[^:/@]+):(?P<port>\d+)(?P<path>/\d+)?$",
+        url.strip(),
+    )
+    if not match:
+        return None
+
+    host = match.group("host")
+    port = match.group("port")
+    path = match.group("path") or "/0"
+    encoded_token = quote(token, safe="")
+    return f"rediss://default:{encoded_token}@{host}:{port}{path}"
+
+
 async def _create_redis_client():
     candidates = []
     primary = normalize_redis_url(config.REDIS_URL)
     if isinstance(primary, str) and primary:
         candidates.append(("REDIS_URL", primary))
+        repaired_primary = _repair_missing_at_in_redis_url(primary)
+        if repaired_primary and all(url != repaired_primary for _, url in candidates):
+            candidates.append(("REDIS_URL(repaired)", repaired_primary))
 
     upstash_candidate = _build_upstash_redis_url(
         config.UPSTASH_REDIS_REST_URL,
@@ -136,6 +163,9 @@ async def _create_arq_pool(primary_redis_url: str = None):
     arq_url = normalize_redis_url(config.ARQ_REDIS_URL)
     if isinstance(arq_url, str) and arq_url:
         candidates.append(("ARQ_REDIS_URL", arq_url))
+        repaired_arq = _repair_missing_at_in_redis_url(arq_url)
+        if repaired_arq and all(url != repaired_arq for _, url in candidates):
+            candidates.append(("ARQ_REDIS_URL(repaired)", repaired_arq))
 
     if isinstance(primary_redis_url, str) and primary_redis_url:
         derived = _replace_redis_db(primary_redis_url, 1)
@@ -170,6 +200,21 @@ async def _start_health_server(port: int):
     site = web.TCPSite(runner, host="0.0.0.0", port=port)
     await site.start()
     return runner
+
+
+async def _get_bot_identity_with_retry(bot: Bot):
+    while True:
+        try:
+            return await bot.get_me()
+        except TelegramUnauthorizedError:
+            logger.error(
+                "BOT_TOKEN is invalid (Telegram Unauthorized). "
+                "Update BOT_TOKEN in Render environment and redeploy. Retrying in 60 seconds..."
+            )
+            await asyncio.sleep(60)
+        except Exception as e:
+            logger.warning(f"Failed to get bot identity: {e}. Retrying in 10 seconds...")
+            await asyncio.sleep(10)
 
 async def acquire_polling_lock(redis_client, bot_id: int, ttl_seconds: int = 90):
     """
@@ -276,9 +321,16 @@ async def api_user_profile(request):
         })
 
 async def main():
+    startup_health_runner = None
+
     # 1. Initialize DB
     logger.info("Initializing database...")
     await init_db()
+
+    render_port = os.getenv("PORT")
+    if render_port and os.getenv("INTERNAL_HEALTH_SERVER_ACTIVE") != "1":
+        startup_health_runner = await _start_health_server(int(render_port))
+        logger.info(f"Startup health server opened on port {render_port}.")
 
     # 2. Initialize Redis
     logger.info("Connecting to Redis...")
@@ -309,7 +361,7 @@ async def main():
     dp["arq_redis"] = arq_redis
 
     # Cache Bot Identity
-    bot_info = await bot.get_me()
+    bot_info = await _get_bot_identity_with_retry(bot)
     logger.info(f"Bot initialized: @{bot_info.username}")
 
     # 4. Register Middlewares
@@ -336,6 +388,10 @@ async def main():
     # 6. Mode Selection: Webhook or Polling
     if webhook_host and str(webhook_host).startswith("http"):
         # PRODUCTION: Webhook Mode
+        if startup_health_runner:
+            await startup_health_runner.cleanup()
+            startup_health_runner = None
+
         app = web.Application()
         
         # Healthcheck endpoint
@@ -372,9 +428,10 @@ async def main():
     else:
         # DEVELOPMENT: Polling Mode
         logger.info("Starting Polling mode (Dev)...")
-        health_runner = None
+        health_runner = startup_health_runner
+        startup_health_runner = None
         render_port = os.getenv("PORT")
-        if render_port:
+        if render_port and not health_runner and os.getenv("INTERNAL_HEALTH_SERVER_ACTIVE") != "1":
             health_runner = await _start_health_server(int(render_port))
             logger.warning(
                 f"PORT={render_port} detected but WEBHOOK_HOST not configured. "
@@ -385,15 +442,13 @@ async def main():
 
         polling_lock = None
         if redis_client:
-            try:
-                polling_lock = await acquire_polling_lock(redis_client, bot_info.id, ttl_seconds=30)
-                logger.info("Polling lock acquired.")
-            except RuntimeError as e:
-                logger.error(f"{e}. Refusing to start second polling instance.")
-                if health_runner:
-                    await health_runner.cleanup()
-                await on_shutdown(bot, redis_client, arq_redis, webhook_host)
-                return
+            while polling_lock is None:
+                try:
+                    polling_lock = await acquire_polling_lock(redis_client, bot_info.id, ttl_seconds=30)
+                    logger.info("Polling lock acquired.")
+                except RuntimeError as e:
+                    logger.warning(f"{e}. Waiting 10 seconds before retrying lock acquisition...")
+                    await asyncio.sleep(10)
 
         try:
             while True:
@@ -409,6 +464,9 @@ async def main():
             if health_runner:
                 await health_runner.cleanup()
             await on_shutdown(bot, redis_client, arq_redis, webhook_host)
+
+    if startup_health_runner:
+        await startup_health_runner.cleanup()
 
 if __name__ == "__main__":
     try:
