@@ -80,6 +80,31 @@ def _is_valid_redis_dsn(url: str) -> bool:
         return False
 
 
+def _is_upstash_redis_url(url: str) -> bool:
+    if not isinstance(url, str):
+        return False
+    try:
+        parsed = urlsplit(url.strip())
+        host = (parsed.hostname or "").lower()
+        return host.endswith("upstash.io")
+    except Exception:
+        return False
+
+
+def _redis_db_index(url: str) -> int:
+    if not isinstance(url, str):
+        return 0
+    try:
+        parsed = urlsplit(url.strip())
+        path = (parsed.path or "").strip("/")
+        if not path:
+            return 0
+        first = path.split("/", 1)[0]
+        return int(first) if first.isdigit() else 0
+    except Exception:
+        return 0
+
+
 def _replace_redis_db(url: str, db_index: int) -> str:
     try:
         parsed = urlsplit(url)
@@ -160,7 +185,7 @@ async def _create_redis_client():
             await client.ping()
             logger.info(f"Connected to Redis via {source}.")
             if source != "REDIS_URL":
-                logger.warning(f"Redis URL fallback used: {_mask_redis_url(candidate)}")
+                logger.info(f"Redis URL fallback used: {_mask_redis_url(candidate)}")
             return client, candidate
         except Exception as e:
             errors.append(f"{source} ({_mask_redis_url(candidate)}): {e}")
@@ -181,8 +206,12 @@ async def _create_redis_client():
 
 async def _create_arq_pool(primary_redis_url: str = None):
     candidates = []
+    preferred_db = 1
     arq_url = normalize_redis_url(config.ARQ_REDIS_URL)
     if _is_valid_redis_dsn(arq_url):
+        if _is_upstash_redis_url(arq_url):
+            preferred_db = 0
+            arq_url = _replace_redis_db(arq_url, 0)
         candidates.append(("ARQ_REDIS_URL", arq_url))
         repaired_arq = _repair_missing_at_in_redis_url(arq_url)
         if repaired_arq and _is_valid_redis_dsn(repaired_arq) and all(url != repaired_arq for _, url in candidates):
@@ -190,26 +219,34 @@ async def _create_arq_pool(primary_redis_url: str = None):
     elif isinstance(arq_url, str) and arq_url:
         repaired_arq = _repair_missing_at_in_redis_url(arq_url)
         if repaired_arq and _is_valid_redis_dsn(repaired_arq):
+            if _is_upstash_redis_url(repaired_arq):
+                preferred_db = 0
+                repaired_arq = _replace_redis_db(repaired_arq, 0)
             candidates.append(("ARQ_REDIS_URL(repaired)", repaired_arq))
         else:
-            logger.warning("ARQ_REDIS_URL is malformed and could not be repaired; trying fallbacks.")
+            logger.info("ARQ_REDIS_URL is malformed and ignored; trying fallbacks.")
+
+    if _is_upstash_redis_url(primary_redis_url):
+        preferred_db = 0
 
     if isinstance(primary_redis_url, str) and primary_redis_url:
-        derived = _replace_redis_db(primary_redis_url, 1)
+        derived = _replace_redis_db(primary_redis_url, preferred_db)
         if _is_valid_redis_dsn(derived) and all(url != derived for _, url in candidates):
-            candidates.append(("REDIS_URL(db=1)", derived))
+            candidates.append((f"REDIS_URL(db={preferred_db})", derived))
 
     upstash_candidate = _build_upstash_redis_url(
         config.UPSTASH_REDIS_REST_URL,
         config.UPSTASH_REDIS_REST_TOKEN,
-        db_index=1,
+        db_index=0 if preferred_db == 0 else 1,
     )
     if upstash_candidate and _is_valid_redis_dsn(upstash_candidate) and all(url != upstash_candidate for _, url in candidates):
-        candidates.append(("UPSTASH_REDIS_REST_URL/TOKEN(db=1)", upstash_candidate))
+        candidates.append((f"UPSTASH_REDIS_REST_URL/TOKEN(db={0 if preferred_db == 0 else 1})", upstash_candidate))
 
     for source, candidate in candidates:
         try:
-            pool = await create_pool(RedisSettings.from_dsn(candidate))
+            settings = RedisSettings.from_dsn(candidate)
+            settings.conn_retries = 1
+            pool = await create_pool(settings)
             logger.info(f"Connected to ARQ Redis via {source}.")
             return pool
         except Exception as e:
