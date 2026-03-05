@@ -1,0 +1,10 @@
+2026-03-04 00:58:27,387 - __main__ - INFO - Initializing database...
+2026-03-04 00:58:32,861 - __main__ - INFO - Connecting to Redis...
+2026-03-04 00:58:32,907 - __main__ - INFO - Connected to ARQ Redis.
+2026-03-04 00:58:32,916 - __main__ - INFO - Redis injected into CacheService, LockService, and RecognitionService.
+2026-03-04 00:58:34,597 - __main__ - INFO - Bot initialized: @BekcodeInstaBot
+2026-03-04 00:58:34,628 - __main__ - INFO - Starting Polling mode (Dev)...
+2026-03-04 00:58:34,752 - __main__ - ERROR - Polling lock already held by DESKTOP-QBRPH8L:15884. Refusing to start second polling instance.
+2026-03-04 00:58:34,794 - __main__ - INFO - ARQ Redis connection closed.
+2026-03-04 00:58:34,807 - __main__ - INFO - Redis connection closed.
+2026-03-04 00:58:35,066 - __main__ - INFO - Bot session closed.

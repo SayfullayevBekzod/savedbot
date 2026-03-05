@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Bot Profile</title>
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-color: #0f172a;
+            --accent-color: #38bdf8;
+            --glass-bg: rgba(255, 255, 255, 0.05);
+            --glass-border: rgba(255, 255, 255, 0.1);
+        }
+
+        body {
+            font-family: 'Outfit', sans-serif;
+            background-color: var(--bg-color);
+            color: white;
+            margin: 0;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            min-height: 100vh;
+        }
+
+        .container {
+            width: 100%;
+            max-width: 400px;
+        }
+
+        .profile-card {
+            background: var(--glass-bg);
+            backdrop-filter: blur(12px);
+            border: 1px solid var(--glass-border);
+            border-radius: 24px;
+            padding: 30px;
+            text-align: center;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+            margin-bottom: 20px;
+        }
+
+        .avatar {
+            width: 80px;
+            height: 80px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, var(--accent-color), #818cf8);
+            margin: 0 auto 15px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 32px;
+            color: white;
+            font-weight: 600;
+        }
+
+        h1 { margin: 10px 0; font-size: 24px; }
+        .username { color: var(--accent-color); font-size: 14px; margin-bottom: 20px; }
+
+        .stats-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 15px;
+            margin-top: 20px;
+        }
+
+        .stat-item {
+            background: rgba(255, 255, 255, 0.03);
+            border-radius: 16px;
+            padding: 15px;
+            border: 1px solid var(--glass-border);
+        }
+
+        .stat-value { font-size: 20px; font-weight: 600; color: var(--accent-color); }
+        .stat-label { font-size: 11px; color: #94a3b8; text-transform: uppercase; letter-spacing: 1px; margin-top: 5px; }
+
+        .btn {
+            width: 100%;
+            background: var(--accent-color);
+            color: #0f172a;
+            border: none;
+            padding: 15px;
+            border-radius: 16px;
+            font-weight: 600;
+            font-family: inherit;
+            cursor: pointer;
+            margin-top: 20px;
+            transition: transform 0.2s;
+        }
+
+        .btn:active { transform: scale(0.98); }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="profile-card">
+            <div id="avatar" class="avatar">U</div>
+            <h1 id="name">Loading...</h1>
+            <div id="username" class="username">@username</div>
+
+            <div class="stats-grid">
+                <div class="stat-item">
+                    <div id="dl_count" class="stat-value">-</div>
+                    <div class="stat-label">Downloads</div>
+                </div>
+                <div class="stat-item">
+                    <div id="ref_count" class="stat-value">-</div>
+                    <div class="stat-label">Referrals</div>
+                </div>
+            </div>
+        </div>
+
+        <button class="btn" onclick="Telegram.WebApp.close()">Back to Bot</button>
+    </div>
+
+    <script>
+        const tg = window.Telegram.WebApp;
+        tg.expand();
+        
+        // Dark Mode Adaptability
+        tg.onEvent('themeChanged', function() {
+            document.body.style.backgroundColor = tg.themeParams.bg_color;
+        });
+
+        const user = tg.initDataUnsafe.user;
+        if (user) {
+            document.getElementById('name').textContent = user.first_name + (user.last_name ? ' ' + user.last_name : '');
+            document.getElementById('username').textContent = user.username ? '@' + user.username : 'ID: ' + user.id;
+            document.getElementById('avatar').textContent = user.first_name[0];
+        }
+
+        // Fetch additional data from our API
+        async function loadProfile() {
+            try {
+                // We'll pass user.id in headers or params
+                const response = await fetch('/api/user/profile?id=' + user.id);
+                const data = await response.json();
+                
+                document.getElementById('dl_count').textContent = data.downloads || 0;
+                document.getElementById('ref_count').textContent = data.referrals || 0;
+            } catch (e) {
+                console.error('Failed to load profile', e);
+            }
+        }
+        
+        if (user) loadProfile();
+    </script>
+</body>
+</html>
