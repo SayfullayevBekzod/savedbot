@@ -3,6 +3,7 @@ import logging
 import os
 import socket
 import sys
+from urllib.parse import quote, urlsplit, urlunsplit
 import redis.asyncio as redis
 from arq.connections import create_pool, RedisSettings
 from aiogram import Bot, Dispatcher
@@ -11,7 +12,7 @@ from aiogram.enums import ParseMode
 from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
 from aiohttp import web
 
-from bot.config import config
+from bot.config import config, normalize_redis_url, normalize_webhook_host
 from bot.handlers.base import router as base_router
 from bot.handlers.recognition import router as recognition_router
 from bot.handlers.inline import router as inline_router
@@ -46,26 +47,129 @@ end
 """
 
 
-def _normalize_redis_url(url: str) -> str:
-    if not isinstance(url, str):
+def _mask_redis_url(url: str) -> str:
+    try:
+        parsed = urlsplit(url)
+        netloc = parsed.netloc
+        if "@" in netloc:
+            creds, host = netloc.rsplit("@", 1)
+            if ":" in creds:
+                user, _ = creds.split(":", 1)
+                netloc = f"{user}:***@{host}"
+            else:
+                netloc = f"***@{host}"
+        return urlunsplit((parsed.scheme, netloc, parsed.path, parsed.query, parsed.fragment))
+    except Exception:
+        return "<invalid-url>"
+
+
+def _replace_redis_db(url: str, db_index: int) -> str:
+    try:
+        parsed = urlsplit(url)
+        return urlunsplit((parsed.scheme, parsed.netloc, f"/{db_index}", parsed.query, parsed.fragment))
+    except Exception:
         return url
-    value = url.strip().strip("\"'")
-    replacements = {
-        "redis://https://": "rediss://",
-        "rediss://https://": "rediss://",
-        "redis://http://": "redis://",
-        "rediss://http://": "redis://",
-        "redis://https:": "rediss://",
-        "rediss://https:": "rediss://",
-        "redis://http:": "redis://",
-        "rediss://http:": "redis://",
-        "https://": "rediss://",
-        "http://": "redis://",
-    }
-    for bad_prefix, good_prefix in replacements.items():
-        if value.startswith(bad_prefix):
-            return good_prefix + value[len(bad_prefix):]
-    return value
+
+
+def _build_upstash_redis_url(rest_url: str, token: str, db_index: int = 0):
+    if not isinstance(rest_url, str) or not isinstance(token, str):
+        return None
+
+    cleaned_rest = rest_url.strip().strip("\"'")
+    cleaned_token = token.strip().strip("\"'")
+    if not cleaned_rest or not cleaned_token:
+        return None
+
+    parsed = urlsplit(cleaned_rest if "://" in cleaned_rest else f"https://{cleaned_rest}")
+    host = parsed.hostname
+    if not host:
+        return None
+
+    port = parsed.port or 6379
+    encoded_token = quote(cleaned_token, safe="")
+    return f"rediss://default:{encoded_token}@{host}:{port}/{db_index}"
+
+
+async def _create_redis_client():
+    candidates = []
+    primary = normalize_redis_url(config.REDIS_URL)
+    if isinstance(primary, str) and primary:
+        candidates.append(("REDIS_URL", primary))
+
+    upstash_candidate = _build_upstash_redis_url(
+        config.UPSTASH_REDIS_REST_URL,
+        config.UPSTASH_REDIS_REST_TOKEN,
+        db_index=0,
+    )
+    if upstash_candidate and all(url != upstash_candidate for _, url in candidates):
+        candidates.append(("UPSTASH_REDIS_REST_URL/TOKEN", upstash_candidate))
+
+    errors = []
+    for source, candidate in candidates:
+        client = None
+        try:
+            client = redis.from_url(candidate, decode_responses=True)
+            await client.ping()
+            logger.info(f"Connected to Redis via {source}.")
+            if source != "REDIS_URL":
+                logger.warning(f"Redis URL fallback used: {_mask_redis_url(candidate)}")
+            return client, candidate
+        except Exception as e:
+            errors.append(f"{source} ({_mask_redis_url(candidate)}): {e}")
+            if client:
+                try:
+                    await client.aclose()
+                except Exception:
+                    pass
+
+    if errors:
+        logger.warning("Redis unavailable; running with reduced functionality.")
+        for item in errors:
+            logger.warning(f"Redis candidate failed: {item}")
+    else:
+        logger.warning("Redis unavailable; no candidate Redis URL found.")
+    return None, None
+
+
+async def _create_arq_pool(primary_redis_url: str = None):
+    candidates = []
+    arq_url = normalize_redis_url(config.ARQ_REDIS_URL)
+    if isinstance(arq_url, str) and arq_url:
+        candidates.append(("ARQ_REDIS_URL", arq_url))
+
+    if isinstance(primary_redis_url, str) and primary_redis_url:
+        derived = _replace_redis_db(primary_redis_url, 1)
+        if all(url != derived for _, url in candidates):
+            candidates.append(("REDIS_URL(db=1)", derived))
+
+    upstash_candidate = _build_upstash_redis_url(
+        config.UPSTASH_REDIS_REST_URL,
+        config.UPSTASH_REDIS_REST_TOKEN,
+        db_index=1,
+    )
+    if upstash_candidate and all(url != upstash_candidate for _, url in candidates):
+        candidates.append(("UPSTASH_REDIS_REST_URL/TOKEN(db=1)", upstash_candidate))
+
+    for source, candidate in candidates:
+        try:
+            pool = await create_pool(RedisSettings.from_dsn(candidate))
+            logger.info(f"Connected to ARQ Redis via {source}.")
+            return pool
+        except Exception as e:
+            logger.warning(f"ARQ Redis candidate failed ({source}): {e}")
+
+    logger.warning("ARQ Redis unavailable; background queue disabled.")
+    return None
+
+
+async def _start_health_server(port: int):
+    app = web.Application()
+    app.router.add_get("/health", health_check)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, host="0.0.0.0", port=port)
+    await site.start()
+    return runner
 
 async def acquire_polling_lock(redis_client, bot_id: int, ttl_seconds: int = 90):
     """
@@ -108,10 +212,11 @@ async def release_polling_lock(redis_client, lock_key: str, lock_value: str, sto
     except Exception as e:
         logger.warning(f"Failed to release polling lock: {e}")
 
-async def on_startup(bot: Bot):
+async def on_startup(bot: Bot, webhook_host: str = None):
     """Actions to perform on startup (Webhook only)."""
-    if config.WEBHOOK_HOST:
-        webhook_url = f"{config.WEBHOOK_HOST}{config.WEBHOOK_PATH}"
+    effective_host = normalize_webhook_host(webhook_host or config.WEBHOOK_HOST)
+    if effective_host:
+        webhook_url = f"{effective_host}{config.WEBHOOK_PATH}"
         logger.info(f"Setting webhook: {webhook_url}")
         await bot.set_webhook(
             url=webhook_url,
@@ -119,9 +224,10 @@ async def on_startup(bot: Bot):
             allowed_updates=["message", "callback_query", "inline_query"]
         )
 
-async def on_shutdown(bot: Bot, redis_client=None, arq_redis=None):
+async def on_shutdown(bot: Bot, redis_client=None, arq_redis=None, webhook_host: str = None):
     """Actions to perform on shutdown."""
-    if config.WEBHOOK_HOST:
+    effective_host = normalize_webhook_host(webhook_host or config.WEBHOOK_HOST)
+    if effective_host:
         logger.info("Deleting webhook...")
         await bot.delete_webhook()
 
@@ -176,25 +282,10 @@ async def main():
 
     # 2. Initialize Redis
     logger.info("Connecting to Redis...")
-    redis_url = _normalize_redis_url(config.REDIS_URL)
-    if redis_url != config.REDIS_URL:
-        logger.warning("REDIS_URL was normalized from malformed input.")
-    try:
-        redis_client = redis.from_url(redis_url, decode_responses=True)
-    except ValueError as e:
-        raise RuntimeError(
-            "Invalid REDIS_URL format. Use redis://host:port/db "
-            "or rediss://default:PASSWORD@host:port/db"
-        ) from e
+    redis_client, active_redis_url = await _create_redis_client()
     
     # 2.1 Initialize ARQ Redis pool for admin broadcast/background jobs
-    arq_redis = None
-    arq_redis_url = _normalize_redis_url(config.ARQ_REDIS_URL)
-    try:
-        arq_redis = await create_pool(RedisSettings.from_dsn(arq_redis_url))
-        logger.info("Connected to ARQ Redis.")
-    except Exception as e:
-        logger.warning(f"ARQ Redis unavailable: {e}")
+    arq_redis = await _create_arq_pool(active_redis_url)
 
     # 2.2 Inject Redis into global services (CRITICAL for caching)
     from bot.services.caching import cache_service
@@ -203,7 +294,10 @@ async def main():
     cache_service.set_redis(redis_client)
     lock_service.set_redis(redis_client)
     recognition_service.set_redis(redis_client)
-    logger.info("Redis injected into CacheService, LockService, and RecognitionService.")
+    if redis_client:
+        logger.info("Redis injected into CacheService, LockService, and RecognitionService.")
+    else:
+        logger.warning("Running without Redis. Locking/cache/rate-limit features are reduced.")
 
     # 3. Initialize bot and dispatcher
     bot = Bot(
@@ -237,8 +331,10 @@ async def main():
     dp.include_router(recognition_router)
     dp.include_router(base_router)
 
+    webhook_host = normalize_webhook_host(config.WEBHOOK_HOST)
+
     # 6. Mode Selection: Webhook or Polling
-    if config.WEBHOOK_HOST and config.WEBHOOK_HOST.startswith("http"):
+    if webhook_host and str(webhook_host).startswith("http"):
         # PRODUCTION: Webhook Mode
         app = web.Application()
         
@@ -261,8 +357,8 @@ async def main():
         setup_application(app, dp, bot=bot, redis_client=redis_client, arq_redis=arq_redis)
         
         # Add custom lifecycle hooks
-        app.on_startup.append(lambda _: on_startup(bot))
-        app.on_shutdown.append(lambda _: on_shutdown(bot, redis_client, arq_redis))
+        app.on_startup.append(lambda _: on_startup(bot, webhook_host))
+        app.on_shutdown.append(lambda _: on_shutdown(bot, redis_client, arq_redis, webhook_host))
 
         port = int(os.getenv("PORT", str(config.BACKEND_PORT)))
         logger.info(f"Starting Webhook server on port {port}...")
@@ -276,6 +372,14 @@ async def main():
     else:
         # DEVELOPMENT: Polling Mode
         logger.info("Starting Polling mode (Dev)...")
+        health_runner = None
+        render_port = os.getenv("PORT")
+        if render_port:
+            health_runner = await _start_health_server(int(render_port))
+            logger.warning(
+                f"PORT={render_port} detected but WEBHOOK_HOST not configured. "
+                "Running polling with health server fallback."
+            )
         # Ensure webhook is deleted before polling to avoid conflict
         await bot.delete_webhook(drop_pending_updates=True)
 
@@ -286,7 +390,9 @@ async def main():
                 logger.info("Polling lock acquired.")
             except RuntimeError as e:
                 logger.error(f"{e}. Refusing to start second polling instance.")
-                await on_shutdown(bot, redis_client, arq_redis)
+                if health_runner:
+                    await health_runner.cleanup()
+                await on_shutdown(bot, redis_client, arq_redis, webhook_host)
                 return
 
         try:
@@ -300,7 +406,9 @@ async def main():
         finally:
             if polling_lock:
                 await release_polling_lock(redis_client, *polling_lock)
-            await on_shutdown(bot, redis_client, arq_redis)
+            if health_runner:
+                await health_runner.cleanup()
+            await on_shutdown(bot, redis_client, arq_redis, webhook_host)
 
 if __name__ == "__main__":
     try:

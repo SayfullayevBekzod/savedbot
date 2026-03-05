@@ -1,6 +1,74 @@
+import os
+import re
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic import field_validator
 from typing import Optional, List, Union
+
+
+def normalize_redis_url(value):
+    if not isinstance(value, str):
+        return value
+
+    url = value.strip().strip("\"'")
+    if not url:
+        return url
+
+    replacements = {
+        "redis://https://": "rediss://",
+        "rediss://https://": "rediss://",
+        "redis://http://": "redis://",
+        "rediss://http://": "redis://",
+        "redis://https:": "rediss://",
+        "rediss://https:": "rediss://",
+        "redis://http:": "redis://",
+        "rediss://http:": "redis://",
+        "https://": "rediss://",
+        "http://": "redis://",
+    }
+    for bad_prefix, good_prefix in replacements.items():
+        if url.startswith(bad_prefix):
+            return good_prefix + url[len(bad_prefix):]
+
+    malformed_patterns = [
+        (r"^(?:redis|rediss)://(?P<auth>[^@/]+@)https://(?P<rest>.+)$", "rediss"),
+        (r"^(?:redis|rediss)://(?P<auth>[^@/]+@)https:(?P<rest>.+)$", "rediss"),
+        (r"^(?:redis|rediss)://(?P<auth>[^@/]+@)http://(?P<rest>.+)$", "redis"),
+        (r"^(?:redis|rediss)://(?P<auth>[^@/]+@)http:(?P<rest>.+)$", "redis"),
+        (r"^(?:redis|rediss)://https://(?P<rest>.+)$", "rediss"),
+        (r"^(?:redis|rediss)://https:(?P<rest>.+)$", "rediss"),
+        (r"^(?:redis|rediss)://http://(?P<rest>.+)$", "redis"),
+        (r"^(?:redis|rediss)://http:(?P<rest>.+)$", "redis"),
+    ]
+    for pattern, scheme in malformed_patterns:
+        match = re.match(pattern, url)
+        if not match:
+            continue
+        auth = match.groupdict().get("auth", "")
+        rest = match.group("rest").lstrip("/")
+        return f"{scheme}://{auth}{rest}"
+
+    return url
+
+
+def normalize_webhook_host(value):
+    if isinstance(value, str):
+        result = value.strip().strip("\"'").rstrip("/")
+        if not result:
+            value = None
+        elif not result.startswith(("http://", "https://")):
+            return f"https://{result}"
+        else:
+            return result
+
+    render_url = os.getenv("RENDER_EXTERNAL_URL")
+    if isinstance(render_url, str):
+        render_url = render_url.strip().strip("\"'").rstrip("/")
+        if render_url:
+            if not render_url.startswith(("http://", "https://")):
+                return f"https://{render_url}"
+            return render_url
+
+    return value
 
 class Settings(BaseSettings):
     BOT_TOKEN: str
@@ -13,8 +81,8 @@ class Settings(BaseSettings):
     
     # Redis
     REDIS_URL: str = "redis://localhost:6379/0"
-    UPSTASH_REDIS_REST_URL: str = "https://working-termite-64317.upstash.io"
-    UPSTASH_REDIS_REST_TOKEN: str = "Afs9AAIncDIxMDNhMDk3NGExZjk0MGQ1YjA2NTk2YjQ1ZDA3ODUxMXAyNjQzMTc"
+    UPSTASH_REDIS_REST_URL: str = ""
+    UPSTASH_REDIS_REST_TOKEN: str = ""
     
     # Webhook
     WEBHOOK_HOST: Optional[str] = None
@@ -39,37 +107,13 @@ class Settings(BaseSettings):
 
     @field_validator("REDIS_URL", "ARQ_REDIS_URL", mode="before")
     @classmethod
-    def normalize_redis_url(cls, v):
-        if not isinstance(v, str):
-            return v
-
-        url = v.strip().strip("\"'")
-        replacements = {
-            "redis://https://": "rediss://",
-            "rediss://https://": "rediss://",
-            "redis://http://": "redis://",
-            "rediss://http://": "redis://",
-            "redis://https:": "rediss://",
-            "rediss://https:": "rediss://",
-            "redis://http:": "redis://",
-            "rediss://http:": "redis://",
-            "https://": "rediss://",
-            "http://": "redis://",
-        }
-        for bad_prefix, good_prefix in replacements.items():
-            if url.startswith(bad_prefix):
-                return good_prefix + url[len(bad_prefix):]
-        return url
+    def validate_redis_url(cls, v):
+        return normalize_redis_url(v)
 
     @field_validator("WEBHOOK_HOST", mode="before")
     @classmethod
-    def normalize_webhook_host(cls, v):
-        if not isinstance(v, str):
-            return v
-        value = v.strip().strip("\"'").rstrip("/")
-        if value and not value.startswith(("http://", "https://")):
-            return f"https://{value}"
-        return value
+    def validate_webhook_host(cls, v):
+        return normalize_webhook_host(v)
     
     @field_validator('ADMIN_IDS', mode='before')
     @classmethod

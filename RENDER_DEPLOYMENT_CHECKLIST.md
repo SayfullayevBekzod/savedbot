@@ -29,14 +29,14 @@ BOT_TOKEN=1234567890:ABCdefGHIjklMNOpqrsTUVwxyz
 ### 🗄️ Database Variables
 ```
 DATABASE_URL=postgresql+asyncpg://user:password@host:5432/dbname
-REDIS_URL=redis://host:6379/0
-ARQ_REDIS_URL=redis://host:6379/1
+REDIS_URL=rediss://default:password@host:6379/0
+ARQ_REDIS_URL=rediss://default:password@host:6379/1
 ```
 - Render PostgreSQL va Redis service URL lari
 
 ### 🌐 Webhook Variables
 ```
-WEBHOOK_HOST=savedbot.onrender.com
+WEBHOOK_HOST=https://savedbot.onrender.com
 WEBHOOK_PATH=/webhook
 BACKEND_PORT=8000
 ```
