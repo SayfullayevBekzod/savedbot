@@ -8,7 +8,6 @@ python-dotenv
 aiohttp
 aiofiles
 alembic
-psycopg2-binary
 uvicorn
 gunicorn
 fastapi
@@ -18,3 +17,4 @@ python-multipart
 pytz
 # shazamio removed - requires Rust compilation
 # Use alternative music recognition or remove feature
+# psycopg2-binary replaced with asyncpg for async support
