@@ -1,0 +1,42 @@
+services:
+  - type: web
+    name: savedbot
+    env: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: python main.py
+    envVars:
+      - key: BOT_TOKEN
+        sync: false
+      - key: DATABASE_URL
+        sync: false
+      - key: REDIS_URL
+        sync: false
+      - key: ARQ_REDIS_URL
+        sync: false
+      - key: WEBHOOK_HOST
+        sync: false
+      - key: BACKEND_PORT
+        value: 8000
+        sync: false
+      - key: DOWNLOAD_DIR
+        value: downloads
+        sync: false
+      - key: MAX_VIDEO_SIZE_MB
+        value: 50
+        sync: false
+      - key: AUTO_VIDEO_MAX_HEIGHT
+        value: 480
+        sync: false
+      - key: UPLOAD_CHUNK_SIZE_KB
+        value: 4096
+        sync: false
+      - key: DOWNLOAD_CONCURRENT_FRAGMENTS
+        value: 256
+        sync: false
+      - key: MAX_CONCURRENT_DOWNLOADS
+        value: 8
+        sync: false
+      - key: COOLDOWN_SECONDS
+        value: 0
+        sync: false
