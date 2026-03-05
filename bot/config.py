@@ -1,10 +1,10 @@
-from pydantic_settings import BaseSettings, SettingsConfigDict, Field
+from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic import field_validator
 from typing import Optional, List, Union
 
 class Settings(BaseSettings):
     BOT_TOKEN: str
-    ADMIN_IDS: Union[List[int], int, str] = Field(default=[], description="Admin IDs (single int, list, or comma-separated string)")
+    ADMIN_IDS: Union[List[int], int, str] = []
     SPONSOR_CHANNELS: List[str] = ["@Bekcode"] # Placeholder channel
     ENABLE_SUBSCRIPTION_CHECK: bool = False
     
