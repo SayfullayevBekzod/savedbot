@@ -51,22 +51,25 @@ def normalize_redis_url(value):
 
 
 def normalize_webhook_host(value):
+    render_url = os.getenv("RENDER_EXTERNAL_URL")
+    clean_render = None
+    if isinstance(render_url, str):
+        clean_render = render_url.strip().strip("\"'").rstrip("/")
+        if clean_render and not clean_render.startswith(("http://", "https://")):
+            clean_render = f"https://{clean_render}"
+
     if isinstance(value, str):
         result = value.strip().strip("\"'").rstrip("/")
+        if result and not result.startswith(("http://", "https://")):
+            result = f"https://{result}"
         if not result:
-            value = None
-        elif not result.startswith(("http://", "https://")):
-            return f"https://{result}"
-        else:
-            return result
+            return clean_render or None
+        if clean_render and ".onrender.com" in result and ".onrender.com" in clean_render and result != clean_render:
+            return clean_render
+        return result
 
-    render_url = os.getenv("RENDER_EXTERNAL_URL")
-    if isinstance(render_url, str):
-        render_url = render_url.strip().strip("\"'").rstrip("/")
-        if render_url:
-            if not render_url.startswith(("http://", "https://")):
-                return f"https://{render_url}"
-            return render_url
+    if clean_render:
+        return clean_render
 
     return value
 

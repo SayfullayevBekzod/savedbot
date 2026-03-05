@@ -21,6 +21,7 @@ async def _start_liveness_server_if_needed():
 
     app = web.Application()
     app.router.add_get("/health", _liveness_handler)
+    app.router.add_get("/", _liveness_handler)
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, host="0.0.0.0", port=int(port))

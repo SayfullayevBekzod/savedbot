@@ -65,6 +65,21 @@ def _mask_redis_url(url: str) -> str:
         return "<invalid-url>"
 
 
+def _is_valid_redis_dsn(url: str) -> bool:
+    if not isinstance(url, str) or not url.strip():
+        return False
+    try:
+        parsed = urlsplit(url.strip())
+        if parsed.scheme not in {"redis", "rediss"}:
+            return False
+        if not parsed.hostname:
+            return False
+        _ = parsed.port
+        return True
+    except Exception:
+        return False
+
+
 def _replace_redis_db(url: str, db_index: int) -> str:
     try:
         parsed = urlsplit(url)
@@ -117,18 +132,24 @@ def _repair_missing_at_in_redis_url(url: str):
 async def _create_redis_client():
     candidates = []
     primary = normalize_redis_url(config.REDIS_URL)
-    if isinstance(primary, str) and primary:
+    if _is_valid_redis_dsn(primary):
         candidates.append(("REDIS_URL", primary))
         repaired_primary = _repair_missing_at_in_redis_url(primary)
-        if repaired_primary and all(url != repaired_primary for _, url in candidates):
+        if repaired_primary and _is_valid_redis_dsn(repaired_primary) and all(url != repaired_primary for _, url in candidates):
             candidates.append(("REDIS_URL(repaired)", repaired_primary))
+    elif isinstance(primary, str) and primary:
+        repaired_primary = _repair_missing_at_in_redis_url(primary)
+        if repaired_primary and _is_valid_redis_dsn(repaired_primary):
+            candidates.append(("REDIS_URL(repaired)", repaired_primary))
+        else:
+            logger.warning("REDIS_URL is malformed and could not be repaired; trying fallbacks.")
 
     upstash_candidate = _build_upstash_redis_url(
         config.UPSTASH_REDIS_REST_URL,
         config.UPSTASH_REDIS_REST_TOKEN,
         db_index=0,
     )
-    if upstash_candidate and all(url != upstash_candidate for _, url in candidates):
+    if upstash_candidate and _is_valid_redis_dsn(upstash_candidate) and all(url != upstash_candidate for _, url in candidates):
         candidates.append(("UPSTASH_REDIS_REST_URL/TOKEN", upstash_candidate))
 
     errors = []
@@ -161,15 +182,21 @@ async def _create_redis_client():
 async def _create_arq_pool(primary_redis_url: str = None):
     candidates = []
     arq_url = normalize_redis_url(config.ARQ_REDIS_URL)
-    if isinstance(arq_url, str) and arq_url:
+    if _is_valid_redis_dsn(arq_url):
         candidates.append(("ARQ_REDIS_URL", arq_url))
         repaired_arq = _repair_missing_at_in_redis_url(arq_url)
-        if repaired_arq and all(url != repaired_arq for _, url in candidates):
+        if repaired_arq and _is_valid_redis_dsn(repaired_arq) and all(url != repaired_arq for _, url in candidates):
             candidates.append(("ARQ_REDIS_URL(repaired)", repaired_arq))
+    elif isinstance(arq_url, str) and arq_url:
+        repaired_arq = _repair_missing_at_in_redis_url(arq_url)
+        if repaired_arq and _is_valid_redis_dsn(repaired_arq):
+            candidates.append(("ARQ_REDIS_URL(repaired)", repaired_arq))
+        else:
+            logger.warning("ARQ_REDIS_URL is malformed and could not be repaired; trying fallbacks.")
 
     if isinstance(primary_redis_url, str) and primary_redis_url:
         derived = _replace_redis_db(primary_redis_url, 1)
-        if all(url != derived for _, url in candidates):
+        if _is_valid_redis_dsn(derived) and all(url != derived for _, url in candidates):
             candidates.append(("REDIS_URL(db=1)", derived))
 
     upstash_candidate = _build_upstash_redis_url(
@@ -177,7 +204,7 @@ async def _create_arq_pool(primary_redis_url: str = None):
         config.UPSTASH_REDIS_REST_TOKEN,
         db_index=1,
     )
-    if upstash_candidate and all(url != upstash_candidate for _, url in candidates):
+    if upstash_candidate and _is_valid_redis_dsn(upstash_candidate) and all(url != upstash_candidate for _, url in candidates):
         candidates.append(("UPSTASH_REDIS_REST_URL/TOKEN(db=1)", upstash_candidate))
 
     for source, candidate in candidates:
@@ -195,6 +222,7 @@ async def _create_arq_pool(primary_redis_url: str = None):
 async def _start_health_server(port: int):
     app = web.Application()
     app.router.add_get("/health", health_check)
+    app.router.add_get("/", health_check)
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, host="0.0.0.0", port=port)
@@ -323,14 +351,14 @@ async def api_user_profile(request):
 async def main():
     startup_health_runner = None
 
-    # 1. Initialize DB
-    logger.info("Initializing database...")
-    await init_db()
-
     render_port = os.getenv("PORT")
     if render_port and os.getenv("INTERNAL_HEALTH_SERVER_ACTIVE") != "1":
         startup_health_runner = await _start_health_server(int(render_port))
         logger.info(f"Startup health server opened on port {render_port}.")
+
+    # 1. Initialize DB
+    logger.info("Initializing database...")
+    await init_db()
 
     # 2. Initialize Redis
     logger.info("Connecting to Redis...")
@@ -396,6 +424,7 @@ async def main():
         
         # Healthcheck endpoint
         app.router.add_get("/health", health_check)
+        app.router.add_get("/", health_check)
         
         # TWA Routes
         app.router.add_get("/profile", serve_profile)
