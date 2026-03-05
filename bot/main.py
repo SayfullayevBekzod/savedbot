@@ -45,6 +45,28 @@ else
 end
 """
 
+
+def _normalize_redis_url(url: str) -> str:
+    if not isinstance(url, str):
+        return url
+    value = url.strip().strip("\"'")
+    replacements = {
+        "redis://https://": "rediss://",
+        "rediss://https://": "rediss://",
+        "redis://http://": "redis://",
+        "rediss://http://": "redis://",
+        "redis://https:": "rediss://",
+        "rediss://https:": "rediss://",
+        "redis://http:": "redis://",
+        "rediss://http:": "redis://",
+        "https://": "rediss://",
+        "http://": "redis://",
+    }
+    for bad_prefix, good_prefix in replacements.items():
+        if value.startswith(bad_prefix):
+            return good_prefix + value[len(bad_prefix):]
+    return value
+
 async def acquire_polling_lock(redis_client, bot_id: int, ttl_seconds: int = 90):
     """
     Ensure only one polling instance is active per bot token.
@@ -154,8 +176,11 @@ async def main():
 
     # 2. Initialize Redis
     logger.info("Connecting to Redis...")
+    redis_url = _normalize_redis_url(config.REDIS_URL)
+    if redis_url != config.REDIS_URL:
+        logger.warning("REDIS_URL was normalized from malformed input.")
     try:
-        redis_client = redis.from_url(config.REDIS_URL, decode_responses=True)
+        redis_client = redis.from_url(redis_url, decode_responses=True)
     except ValueError as e:
         raise RuntimeError(
             "Invalid REDIS_URL format. Use redis://host:port/db "
@@ -164,8 +189,9 @@ async def main():
     
     # 2.1 Initialize ARQ Redis pool for admin broadcast/background jobs
     arq_redis = None
+    arq_redis_url = _normalize_redis_url(config.ARQ_REDIS_URL)
     try:
-        arq_redis = await create_pool(RedisSettings.from_dsn(config.ARQ_REDIS_URL))
+        arq_redis = await create_pool(RedisSettings.from_dsn(arq_redis_url))
         logger.info("Connected to ARQ Redis.")
     except Exception as e:
         logger.warning(f"ARQ Redis unavailable: {e}")
