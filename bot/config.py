@@ -13,6 +13,8 @@ class Settings(BaseSettings):
     
     # Redis
     REDIS_URL: str = "redis://localhost:6379/0"
+    UPSTASH_REDIS_REST_URL: str = "https://working-termite-64317.upstash.io"
+    UPSTASH_REDIS_REST_TOKEN: str = "Afs9AAIncDIxMDNhMDk3NGExZjk0MGQ1YjA2NTk2YjQ1ZDA3ODUxMXAyNjQzMTc"
     
     # Webhook
     WEBHOOK_HOST: Optional[str] = None
