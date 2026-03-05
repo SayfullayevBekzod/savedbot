@@ -36,6 +36,40 @@ class Settings(BaseSettings):
     
     # Arq Settings
     ARQ_REDIS_URL: str = "redis://localhost:6379/1"
+
+    @field_validator("REDIS_URL", "ARQ_REDIS_URL", mode="before")
+    @classmethod
+    def normalize_redis_url(cls, v):
+        if not isinstance(v, str):
+            return v
+
+        url = v.strip().strip("\"'")
+        replacements = {
+            "redis://https://": "rediss://",
+            "rediss://https://": "rediss://",
+            "redis://http://": "redis://",
+            "rediss://http://": "redis://",
+            "redis://https:": "rediss://",
+            "rediss://https:": "rediss://",
+            "redis://http:": "redis://",
+            "rediss://http:": "redis://",
+            "https://": "rediss://",
+            "http://": "redis://",
+        }
+        for bad_prefix, good_prefix in replacements.items():
+            if url.startswith(bad_prefix):
+                return good_prefix + url[len(bad_prefix):]
+        return url
+
+    @field_validator("WEBHOOK_HOST", mode="before")
+    @classmethod
+    def normalize_webhook_host(cls, v):
+        if not isinstance(v, str):
+            return v
+        value = v.strip().strip("\"'").rstrip("/")
+        if value and not value.startswith(("http://", "https://")):
+            return f"https://{value}"
+        return value
     
     @field_validator('ADMIN_IDS', mode='before')
     @classmethod

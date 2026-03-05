@@ -154,7 +154,13 @@ async def main():
 
     # 2. Initialize Redis
     logger.info("Connecting to Redis...")
-    redis_client = redis.from_url(config.REDIS_URL, decode_responses=True)
+    try:
+        redis_client = redis.from_url(config.REDIS_URL, decode_responses=True)
+    except ValueError as e:
+        raise RuntimeError(
+            "Invalid REDIS_URL format. Use redis://host:port/db "
+            "or rediss://default:PASSWORD@host:port/db"
+        ) from e
     
     # 2.1 Initialize ARQ Redis pool for admin broadcast/background jobs
     arq_redis = None
@@ -232,10 +238,11 @@ async def main():
         app.on_startup.append(lambda _: on_startup(bot))
         app.on_shutdown.append(lambda _: on_shutdown(bot, redis_client, arq_redis))
 
-        logger.info(f"Starting Webhook server on port {config.BACKEND_PORT}...")
+        port = int(os.getenv("PORT", str(config.BACKEND_PORT)))
+        logger.info(f"Starting Webhook server on port {port}...")
         runner = web.AppRunner(app)
         await runner.setup()
-        site = web.TCPSite(runner, host="0.0.0.0", port=config.BACKEND_PORT)
+        site = web.TCPSite(runner, host="0.0.0.0", port=port)
         await site.start()
 
         # Keep running
