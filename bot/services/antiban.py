@@ -1,18 +1,19 @@
 import random
 import os
 import logging
-from typing import Optional, List, Dict
+from typing import Optional, List, Dict, Set
 from bot.config import config
 import time
 
 logger = logging.getLogger(__name__)
 
 class CookieManager:
-    """Manages cookies with automatic rotation and failure tracking."""
+    """Manages cookies with sequential rotation and failure tracking."""
     
     def __init__(self):
         self.all_cookies: List[str] = []
         self.cookie_status: Dict[str, Dict] = {}  # {cookie_path: {failed: bool, fail_count: int, last_used: time}}
+        self._rotation_index: int = 0
         self._refresh_cookies()
         
     def _refresh_cookies(self):
@@ -25,14 +26,16 @@ class CookieManager:
         
         # Priority 2: cookies from cookies/ directory
         if os.path.exists("cookies/"):
-            for f in os.listdir("cookies/"):
-                if f.endswith(".txt"):
+            for f in sorted(os.listdir("cookies/")):
+                if f.lower().endswith(".txt"):
                     cookie_path = os.path.join("cookies/", f)
                     if cookie_path not in new_cookies:
                         new_cookies.append(cookie_path)
         
         # Update the list
         self.all_cookies = new_cookies
+        current_status = self.cookie_status
+        self.cookie_status = {c: current_status[c] for c in self.all_cookies if c in current_status}
         
         # Initialize status for new cookies
         for cookie in self.all_cookies:
@@ -43,28 +46,52 @@ class CookieManager:
                     'last_used': None,
                     'last_error': None
                 }
+
+        if self.all_cookies:
+            self._rotation_index %= len(self.all_cookies)
+        else:
+            self._rotation_index = 0
+
+    def _get_rotation_order(self) -> List[str]:
+        """Return cookies ordered from current rotation pointer."""
+        if not self.all_cookies:
+            return []
+
+        total = len(self.all_cookies)
+        return [self.all_cookies[(self._rotation_index + i) % total] for i in range(total)]
     
-    def get_next_cookie(self, exclude_failed: bool = True) -> Optional[str]:
+    def get_next_cookie(self, exclude_failed: bool = True, attempted: Optional[Set[str]] = None) -> Optional[str]:
         """
-        Get next cookie to use.
-        If exclude_failed=True, tries working cookies first, then retries failed ones.
+        Get next cookie to use in round-robin order.
+        If exclude_failed=True, tries working cookies first, then failed ones.
+        Attempted cookies can be excluded for the current retry cycle.
         """
         self._refresh_cookies()  # Check for new cookies
         
         if not self.all_cookies:
             return None
-        
-        # First, try cookies that are not failed
-        available = [c for c in self.all_cookies if not self.cookie_status[c].get('failed', False)]
-        
-        if available:
-            cookie = random.choice(available)
-            self.cookie_status[cookie]['last_used'] = time.time()
-            return cookie
-        
-        # If all are failed, reset one and try it
-        if self.all_cookies:
-            selected = random.choice(self.all_cookies)
+
+        attempted = attempted or set()
+        ordered = self._get_rotation_order()
+
+        # First, try cookies that are not failed and not yet attempted
+        candidates: List[str] = []
+        if exclude_failed:
+            candidates = [
+                c for c in ordered
+                if not self.cookie_status[c].get('failed', False) and c not in attempted
+            ]
+
+            # If all working cookies are exhausted, allow failed ones too
+            if not candidates:
+                candidates = [c for c in ordered if c not in attempted]
+        else:
+            candidates = [c for c in ordered if c not in attempted]
+
+        if candidates:
+            selected = candidates[0]
+            selected_index = self.all_cookies.index(selected)
+            self._rotation_index = (selected_index + 1) % len(self.all_cookies)
             self.cookie_status[selected]['last_used'] = time.time()
             return selected
         
@@ -83,6 +110,7 @@ class CookieManager:
         if cookie_path in self.cookie_status:
             self.cookie_status[cookie_path]['failed'] = False
             self.cookie_status[cookie_path]['fail_count'] = 0
+            self.cookie_status[cookie_path]['last_error'] = None
             logger.info(f"Cookie marked as working: {cookie_path}")
     
     def reset_failed_cookies(self):
@@ -91,9 +119,10 @@ class CookieManager:
             if self.cookie_status[cookie]['fail_count'] > 0:
                 # Reset after 5 attempts
                 if self.cookie_status[cookie]['fail_count'] >= 5:
+                    fail_count = self.cookie_status[cookie]['fail_count']
                     self.cookie_status[cookie]['failed'] = False
                     self.cookie_status[cookie]['fail_count'] = 0
-                    logger.info(f"Cookie reset after {self.cookie_status[cookie]['fail_count']} failures: {cookie}")
+                    logger.info(f"Cookie reset after {fail_count} failures: {cookie}")
     
     def get_status(self) -> Dict:
         """Get current status of all cookies."""
@@ -123,8 +152,12 @@ class AntiBanService:
         return None
 
     def get_random_cookie_file(self) -> Optional[str]:
-        """Get next cookie file (with automatic rotation on failure)."""
-        return self.cookie_manager.get_next_cookie()
+        """Backward-compatible alias for sequential cookie selection."""
+        return self.get_next_cookie_file()
+
+    def get_next_cookie_file(self, attempted_cookies: Optional[Set[str]] = None) -> Optional[str]:
+        """Get next cookie file in round-robin order, skipping attempted ones."""
+        return self.cookie_manager.get_next_cookie(attempted=attempted_cookies)
     
     def mark_cookie_failed(self, cookie_path: str, error: str = None):
         """Mark cookie as failed and use next one."""

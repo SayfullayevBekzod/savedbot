@@ -1,11 +1,14 @@
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
 import asyncio
 from datetime import date
+import logging
 from bot.config import config
 from bot.database.models import Base, User, Download
 from sqlalchemy import select, update, func
 from typing import Optional
 import uuid
+
+logger = logging.getLogger(__name__)
 
 # For Neon and other cloud providers requiring SSL
 connect_args = {}

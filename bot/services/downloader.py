@@ -43,6 +43,7 @@ class DownloaderService:
         max_retries = 2
         retries = 0
         last_error = None
+        attempted_cookies = set()
         
         while retries < max_retries:
             try:
@@ -51,7 +52,9 @@ class DownloaderService:
                 proxy = antiban_service.get_random_proxy()
                 if proxy: ydl_opts['proxy'] = proxy
                 
-                cookie_file = antiban_service.get_random_cookie_file()
+                cookie_file = antiban_service.get_next_cookie_file(attempted_cookies=attempted_cookies)
+                if cookie_file:
+                    attempted_cookies.add(cookie_file)
                 if cookie_file: ydl_opts['cookiefile'] = cookie_file
                 
                 loop = asyncio.get_event_loop()
@@ -224,16 +227,16 @@ class DownloaderService:
         
         while retries < max_retries:
             try:
-                # Get next cookie (skip recently failed ones)
-                cookie_file = antiban_service.get_random_cookie_file()
-                
-                if cookie_file == None:
-                    break
-                
-                # Avoid trying the same cookie twice in a row
-                if cookie_file in attempted_cookies and len(antiban_service.cookie_manager.all_cookies) > 1:
-                    continue
-                
+                # Get next cookie in sequence and skip cookies already tried in this retry cycle
+                cookie_file = antiban_service.get_next_cookie_file(attempted_cookies=attempted_cookies)
+                if cookie_file is None:
+                    if not attempted_cookies:
+                        break
+                    attempted_cookies.clear()
+                    cookie_file = antiban_service.get_next_cookie_file()
+                    if cookie_file is None:
+                        break
+
                 attempted_cookies.add(cookie_file)
                 
                 # Prepare options with cookie

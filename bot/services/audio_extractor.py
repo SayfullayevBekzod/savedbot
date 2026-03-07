@@ -54,7 +54,6 @@ class AudioExtractor:
             "-i", input_path,
             "-t", str(safe_duration),
             "-vn",
-            "-af", "loudnorm=I=-16:LRA=11:TP=-1.5",
             "-acodec", "pcm_s16le",
             "-ar", "44100",
             "-ac", "1",

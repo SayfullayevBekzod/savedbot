@@ -104,6 +104,9 @@ class Settings(BaseSettings):
     # Anti-ban
     COOLDOWN_SECONDS: int = 0  # No cooldown for maximum speed
     MAX_CONCURRENT_DOWNLOADS: int = 8  # Maximum concurrent downloads
+
+    # Music recognition (Shazam)
+    RECOGNITION_PROXY: str = ""
     
     # Arq Settings
     ARQ_REDIS_URL: str = "redis://localhost:6379/1"
