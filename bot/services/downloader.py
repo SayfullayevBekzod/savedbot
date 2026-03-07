@@ -230,31 +230,35 @@ class DownloaderService:
                 # Get next cookie in sequence and skip cookies already tried in this retry cycle
                 cookie_file = antiban_service.get_next_cookie_file(attempted_cookies=attempted_cookies)
                 if cookie_file is None:
-                    if not attempted_cookies:
-                        break
-                    attempted_cookies.clear()
-                    cookie_file = antiban_service.get_next_cookie_file()
-                    if cookie_file is None:
-                        break
+                    # No cookies found: still continue with no-cookie attempts.
+                    # If cookies exist but all were attempted, reset cycle once.
+                    if attempted_cookies:
+                        attempted_cookies.clear()
+                        cookie_file = antiban_service.get_next_cookie_file(attempted_cookies=attempted_cookies)
 
-                attempted_cookies.add(cookie_file)
+                using_cookie = bool(cookie_file and os.path.exists(cookie_file))
+                if using_cookie:
+                    attempted_cookies.add(cookie_file)
                 
                 # Prepare options with cookie
                 ydl_opts = dict(ydl_base_opts)
-                if cookie_file and os.path.exists(cookie_file):
+                if using_cookie:
                     ydl_opts['cookiefile'] = cookie_file
                 
                 proxy = antiban_service.get_random_proxy()
                 if proxy: 
                     ydl_opts['proxy'] = proxy
                 
-                logger.info(f"Download attempt {retries + 1} with cookie: {cookie_file}")
+                if using_cookie:
+                    logger.info(f"Download attempt {retries + 1} with cookie: {cookie_file}")
+                else:
+                    logger.info(f"Download attempt {retries + 1} without cookies")
                 
                 # Try download
                 loop = asyncio.get_event_loop()
                 download_info = await loop.run_in_executor(
                     None, 
-                    lambda: self._perform_download(url, ydl_opts, cookie_file)
+                    lambda: self._perform_download(url, ydl_opts, cookie_file if using_cookie else None)
                 )
                 
                 if download_info:
@@ -281,7 +285,10 @@ class DownloaderService:
                             'is_audio': is_audio
                         }
                 
-                return None
+                last_error = "Empty media response from extractor"
+                logger.warning(f"Download attempt {retries + 1} failed: {last_error}")
+                retries += 1
+                continue
                 
             except Exception as e:
                 last_error = str(e)
@@ -292,7 +299,8 @@ class DownloaderService:
                 if retries >= max_retries:
                     antiban_service.cookie_manager.reset_failed_cookies()
         
-        return {"error": f"Download failed after {retries} attempts. Last error: {last_error}"}
+        safe_error = last_error or "Unknown error"
+        return {"error": f"Download failed after {retries} attempts. Last error: {safe_error}"}
 
     async def fast_download(self, url: str, max_size_mb: int = 50) -> Optional[Dict[str, Any]]:
         """Single-pass download: extract info + download in one yt-dlp call."""
