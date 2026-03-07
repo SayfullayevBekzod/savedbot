@@ -4,6 +4,7 @@ import logging
 import os
 from typing import Optional, Any, Dict
 from dataclasses import dataclass, asdict
+import aiohttp
 from bot.config import config
 
 logger = logging.getLogger(__name__)
@@ -51,6 +52,10 @@ class RecognitionService:
             logger.info("Recognition provider initialized: shazamio")
         except Exception as e:
             logger.warning(f"shazamio unavailable: {e}")
+
+        self.audd_token = (config.AUDD_API_TOKEN or "").strip()
+        if self.audd_token:
+            logger.info("Recognition fallback initialized: audd")
 
     def set_redis(self, redis_client):
         self.redis = redis_client
@@ -291,6 +296,102 @@ class RecognitionService:
             match_count=match_count,
         )
 
+    async def _recognize_with_audd(self, file_path: str) -> Optional[RecognitionResult]:
+        """Fallback recognition via AudD API (no Rust dependency)."""
+        if not self.audd_token:
+            return None
+        if not os.path.exists(file_path):
+            logger.warning(f"Recognition file not found: {file_path}")
+            return None
+
+        proxy = self._get_proxy()
+        timeout = aiohttp.ClientTimeout(total=40, connect=10)
+        form = aiohttp.FormData()
+        form.add_field("api_token", self.audd_token)
+        form.add_field("return", "spotify,apple_music,lyrics")
+
+        try:
+            with open(file_path, "rb") as audio_fp:
+                form.add_field(
+                    "file",
+                    audio_fp,
+                    filename=os.path.basename(file_path),
+                    content_type="application/octet-stream",
+                )
+                async with aiohttp.ClientSession(timeout=timeout) as session:
+                    async with session.post(
+                        "https://api.audd.io/",
+                        data=form,
+                        proxy=proxy or None,
+                    ) as resp:
+                        if resp.status != 200:
+                            logger.warning(f"audd request failed with status={resp.status}")
+                            return None
+                        payload = await resp.json(content_type=None)
+        except Exception as e:
+            logger.warning(f"audd request error: {e}")
+            return None
+
+        if not isinstance(payload, dict):
+            return None
+        if payload.get("status") != "success":
+            return None
+
+        track = payload.get("result")
+        if not isinstance(track, dict):
+            return None
+
+        title = str(track.get("title") or "").strip()
+        artist = str(track.get("artist") or "").strip()
+        if not title or not artist:
+            return None
+
+        album = str(track.get("album") or "").strip() or None
+        release_date = str(track.get("release_date") or "").strip()
+        year = release_date[:4] if len(release_date) >= 4 else None
+
+        lyrics = None
+        lyrics_data = track.get("lyrics")
+        if isinstance(lyrics_data, dict):
+            lyrics = str(lyrics_data.get("lyrics") or lyrics_data.get("text") or "").strip() or None
+
+        spotify_url = None
+        cover_url = None
+        spotify_data = track.get("spotify")
+        if isinstance(spotify_data, dict):
+            external_urls = spotify_data.get("external_urls")
+            if isinstance(external_urls, dict):
+                spotify_url = str(external_urls.get("spotify") or "").strip() or None
+
+            album_data = spotify_data.get("album")
+            if isinstance(album_data, dict):
+                images = album_data.get("images")
+                if isinstance(images, list) and images:
+                    first_img = images[0]
+                    if isinstance(first_img, dict):
+                        cover_url = str(first_img.get("url") or "").strip() or None
+
+        apple_music_url = None
+        apple_data = track.get("apple_music")
+        if isinstance(apple_data, dict):
+            apple_music_url = str(apple_data.get("url") or "").strip() or None
+
+        shazam_like_url = str(track.get("song_link") or "").strip() or None
+
+        return RecognitionResult(
+            title=title,
+            artist=artist,
+            album=album,
+            year=year,
+            cover_url=cover_url,
+            lyrics=lyrics,
+            spotify_url=spotify_url,
+            youtube_url=None,
+            apple_music_url=apple_music_url,
+            shazam_url=shazam_like_url,
+            match_count=1,
+        )
+
     async def recognize(self, file_path: str) -> Optional[RecognitionResult]:
         """Recognize music from audio file and cache result."""
         try:
@@ -299,9 +400,16 @@ class RecognitionService:
             if cached:
                 return cached
 
+            provider = None
             result = await self._recognize_with_shazamio(file_path)
             if result:
-                logger.info("Recognition success via provider: shazamio")
+                provider = "shazamio"
+            else:
+                result = await self._recognize_with_audd(file_path)
+                if result:
+                    provider = "audd"
+            if result:
+                logger.info(f"Recognition success via provider: {provider}")
 
             if result:
                 await self.cache_result(audio_hash, result)

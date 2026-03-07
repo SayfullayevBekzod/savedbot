@@ -107,6 +107,7 @@ class Settings(BaseSettings):
 
     # Music recognition (Shazam)
     RECOGNITION_PROXY: str = ""
+    AUDD_API_TOKEN: str = ""
     
     # Arq Settings
     ARQ_REDIS_URL: str = "redis://localhost:6379/1"
