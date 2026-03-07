@@ -37,7 +37,13 @@ services:
         value: "8"
       - key: COOLDOWN_SECONDS
         value: "0"
+      - key: INSTAGRAM_COOKIES
+        sync: false
+      - key: INSTAGRAM_COOKIES_B64
+        sync: false
       - key: RECOGNITION_PROXY
+        sync: false
+      - key: AUDD_API_TOKEN
         sync: false
       - key: PYTHON_VERSION
         value: "3.11.11"
@@ -75,7 +81,13 @@ services:
         value: "8"
       - key: COOLDOWN_SECONDS
         value: "0"
+      - key: INSTAGRAM_COOKIES
+        sync: false
+      - key: INSTAGRAM_COOKIES_B64
+        sync: false
       - key: RECOGNITION_PROXY
+        sync: false
+      - key: AUDD_API_TOKEN
         sync: false
       - key: PYTHON_VERSION
         value: "3.11.11"

@@ -243,7 +243,7 @@ class RecognitionService:
 
     async def _recognize_with_shazamio(self, file_path: str) -> Optional[RecognitionResult]:
         if not self.shazam_client:
-            logger.warning("shazamio client is not available.")
+            logger.debug("shazamio client is not available; skipping shazam provider.")
             return None
         if not os.path.exists(file_path):
             logger.warning(f"Recognition file not found: {file_path}")

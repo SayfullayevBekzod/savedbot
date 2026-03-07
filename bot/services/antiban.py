@@ -1,6 +1,7 @@
 import random
 import os
 import logging
+import base64
 from typing import Optional, List, Dict, Set
 from bot.config import config
 import time
@@ -137,7 +138,56 @@ class CookieManager:
 class AntiBanService:
     def __init__(self):
         self.proxies: List[str] = self._load_proxies()
+        self._materialize_instagram_cookies_from_env()
         self.cookie_manager = CookieManager()
+
+    def _materialize_instagram_cookies_from_env(self):
+        """
+        Build runtime cookies.txt from env variables (for deploy platforms where
+        cookie files are not committed to git).
+        Priority:
+          1) INSTAGRAM_COOKIES_B64
+          2) INSTAGRAM_COOKIES (supports escaped \\n newlines)
+        """
+        source = None
+        cookie_text = ""
+
+        raw_b64 = (config.INSTAGRAM_COOKIES_B64 or "").strip()
+        raw_plain = (config.INSTAGRAM_COOKIES or "").strip()
+
+        if raw_b64:
+            try:
+                cookie_text = base64.b64decode(raw_b64).decode("utf-8", errors="ignore")
+                source = "INSTAGRAM_COOKIES_B64"
+            except Exception as e:
+                logger.error(f"Failed to decode INSTAGRAM_COOKIES_B64: {e}")
+                return
+        elif raw_plain:
+            cookie_text = raw_plain.replace("\\n", "\n")
+            source = "INSTAGRAM_COOKIES"
+        else:
+            return
+
+        cookie_text = cookie_text.strip()
+        if not cookie_text:
+            logger.warning(f"{source} is set but empty after parsing.")
+            return
+
+        cookie_file = "cookies.txt"
+        try:
+            existing = ""
+            if os.path.exists(cookie_file):
+                with open(cookie_file, "r", encoding="utf-8", errors="ignore") as f:
+                    existing = f.read().strip()
+            if existing == cookie_text:
+                logger.info("cookies.txt is already up to date from env.")
+                return
+
+            with open(cookie_file, "w", encoding="utf-8", newline="\n") as f:
+                f.write(cookie_text + "\n")
+            logger.info(f"cookies.txt was generated from {source}.")
+        except Exception as e:
+            logger.error(f"Failed to write cookies.txt from {source}: {e}")
 
     def _load_proxies(self) -> List[str]:
         # Expecting a file proxies.txt with one proxy per line

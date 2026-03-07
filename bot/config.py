@@ -104,6 +104,8 @@ class Settings(BaseSettings):
     # Anti-ban
     COOLDOWN_SECONDS: int = 0  # No cooldown for maximum speed
     MAX_CONCURRENT_DOWNLOADS: int = 8  # Maximum concurrent downloads
+    INSTAGRAM_COOKIES: str = ""
+    INSTAGRAM_COOKIES_B64: str = ""
 
     # Music recognition (Shazam)
     RECOGNITION_PROXY: str = ""
