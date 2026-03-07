@@ -62,18 +62,16 @@ class RecognitionService:
 
     @staticmethod
     def _get_proxy() -> Optional[str]:
-        """Get proxy for recognition requests (explicit config first)."""
+        """Get proxy for recognition requests (explicit config only)."""
         from bot.config import config as runtime_config
 
         explicit_proxy = (runtime_config.RECOGNITION_PROXY or "").strip()
         if explicit_proxy:
             return explicit_proxy
 
-        try:
-            from bot.services.antiban import antiban_service
-            return antiban_service.get_random_proxy()
-        except Exception:
-            return None
+        # Recognition endpoints are sensitive to unstable rotating proxies.
+        # Use a proxy only when explicitly configured for recognition.
+        return None
 
     def _get_audio_hash(self, file_path: str) -> str:
         """Generate SHA256 hash of audio file for cache key."""
