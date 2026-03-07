@@ -39,6 +39,12 @@ services:
         value: "0"
       - key: RECOGNITION_PROXY
         sync: false
+      - key: PYTHON_VERSION
+        value: "3.11.11"
+      - key: CARGO_HOME
+        value: /tmp/cargo
+      - key: RUSTUP_HOME
+        value: /tmp/rustup
 
   - type: worker
     name: savedbot-worker
@@ -71,3 +77,9 @@ services:
         value: "0"
       - key: RECOGNITION_PROXY
         sync: false
+      - key: PYTHON_VERSION
+        value: "3.11.11"
+      - key: CARGO_HOME
+        value: /tmp/cargo
+      - key: RUSTUP_HOME
+        value: /tmp/rustup

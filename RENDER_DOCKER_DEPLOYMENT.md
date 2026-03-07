@@ -80,7 +80,23 @@ If audio extraction fails and logs mention FFmpeg:
 5. Verify `Dockerfile` contains:
    - `apt-get install ... ffmpeg ...`
 
-## 7) Webhook-Only Production Mode
+## 7) Debug: `shazamio-core` / maturin Error
+
+If deploy logs show:
+- `metadata-generation-failed`
+- package: `shazamio-core`
+- `Read-only file system (os error 30)`
+- interpreter path like `.venv/bin/python3.14`
+
+Fix:
+1. Deploy via Docker (`render.yaml`) instead of native Python runtime.
+2. Pin Python to 3.11 (`runtime.txt` is set to `python-3.11.11`).
+3. Keep writable cargo env vars:
+   - `CARGO_HOME=/tmp/cargo`
+   - `RUSTUP_HOME=/tmp/rustup`
+4. Clear build cache and redeploy once.
+
+## 8) Webhook-Only Production Mode
 
 Webhook mode is enabled when `WEBHOOK_HOST` is set.
 If `WEBHOOK_HOST` is missing, app falls back to polling (not recommended on Render production).
@@ -89,7 +105,7 @@ Set:
 - `WEBHOOK_HOST=https://<your-render-domain>`
 - `WEBHOOK_PATH=/webhook`
 
-## 8) Performance and Scale Tips (500k+ users)
+## 9) Performance and Scale Tips (500k+ users)
 
 - Use paid Render plans (`starter`/`standard`) for both web and worker.
 - Keep web and worker separated (already configured).
@@ -104,7 +120,7 @@ Set:
   - DB connections
 - Consider object storage/CDN for large media workflows.
 
-## 9) Security Checklist
+## 10) Security Checklist
 
 - Never commit real `.env` or tokens.
 - Keep `BOT_TOKEN` only in Render env vars.

@@ -15,6 +15,6 @@ mutagen
 arq
 python-multipart
 pytz
-shazamio>=0.8.1
+shazamio==0.8.1
 # Music recognition provider: shazamio (Shazam only).
 # psycopg2-binary replaced with asyncpg for async support

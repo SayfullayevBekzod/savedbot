@@ -4,7 +4,9 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
-    VENV_PATH=/opt/venv
+    VENV_PATH=/opt/venv \
+    CARGO_HOME=/tmp/cargo \
+    RUSTUP_HOME=/tmp/rustup
 
 WORKDIR /app
 
